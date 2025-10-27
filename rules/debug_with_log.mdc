@@ -1,0 +1,230 @@
+---
+description: Debug code with log files
+alwaysApply: false
+---
+
+# AI Agent Debugging & Logging Protocol
+
+This document outlines the standard operating procedure for an AI agent when assisting a user with debugging code. It is split into two parts: adding logs to code and analyzing those logs for debugging.
+
+## Part 1: How to Add Logs
+
+This section covers the principles and language-specific methods for instrumenting code with effective log statements.
+
+### Guiding Principles for Adding Logs
+
+1.  **Be Strategic, Not Noisy:** Do not log every line. Insert logs at critical points:
+      * Function entry and exit (with parameters and return values).
+      * Inside loops (e.g., first and last iteration, or on a specific condition).
+      * Before and after major state changes (e.g., "Variable `x` before calculation: `$$value$$`", "Variable `x` after calculation: `$$value$$`").
+      * Inside conditional branches (`if`/`else`/`match`) to trace which path was taken.
+      * In all `catch` or `error` handling blocks, logging the full error object.
+2.  **Use Standard Outputs:**
+      * For general debug information, log to **Standard Output (stdout)**.
+      * For errors, warnings, and explicit debug traces, log to **Standard Error (stderr)**. This allows the user to separate normal program output from debug output.
+3.  **Use Libraries When Appropriate:** For simple scripts, basic print statements are fine. If the user's project already has a logging library (`logging` in Python, `tracing` in Rust, `winston`/`pino` in JS), *use that library*. If not, default to the simple methods below.
+4.  **Be Clear:** Log messages must be unambiguous. `DEBUG: process_data() received user_id: 123` is infinitely better than `in function` or just `123`.
+
+### Language-Specific Logging Instructions
+
+#### Python
+
+  * **How to Log (Simple):** Use `print()` directed to `stderr`.
+    ```python
+    import sys
+    print(f"DEBUG: My variable value: {my_var}", file=sys.stderr)
+    ```
+  * **How to Log (Recommended):** Use the built-in `logging` module. This is the standard.
+    ```python
+    import logging
+
+    # Configure logging at the start of the script
+    # This will print DEBUG and higher messages to stderr
+    logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
+
+    # ...
+
+    logging.debug(f"Entering function process_user with user_id: {user_id}")
+    try:
+        # ... some code ...
+        logging.info("Successfully processed user")
+    except Exception as e:
+        logging.error(f"Failed to process user {user_id}: {e}", exc_info=True)
+    ```
+
+#### JavaScript / TypeScript (Node.js)
+
+  * **How to Log:** Use the built-in `console` object.
+      * `console.log()`: For general info (writes to `stdout`).
+      * `console.warn()`: For warnings (writes to `stderr`).
+      * `console.error()`: For errors (writes to `stderr`).
+      * **For debugging, `console.log` is acceptable, but `console.error` is often better as it writes to `stderr`.**
+    <!-- end list -->
+    ```javascript
+    // Use console.log for general flow
+    console.log(`INFO: Starting request for user: ${userId}`);
+
+    // Use console.error for debug-specific traces
+    console.error(`DEBUG: User object state: ${JSON.stringify(user, null, 2)}`);
+
+    try {
+      // ...
+    } catch (error) {
+      console.error(`ERROR: Failed to fetch data:`, error);
+    }
+    ```
+
+#### Rust
+
+  * **How to Log (Recommended):** Use the `tracing` crate with `tracing_subscriber`. This is the modern standard for Rust applications.
+      * **Cargo.toml:**
+        ```toml
+        [dependencies]
+        tracing = "0.1"
+        tracing_subscriber = { version = "0.3", features = ["env-filter"] }
+        ```
+      * **main.rs:**
+        ```rust
+        use tracing::{debug, error, info, warn, instrument};
+        use tracing_subscriber::EnvFilter;
+
+        // The #[instrument] attribute automatically creates a span and
+        // logs function entry/exit at the TRACE level.
+        #[instrument]
+        fn process_item(item_id: u32) {
+            info!("Processing item...");
+
+            // Use `?` for standard Debug formatting
+            debug!(?item_id, "Item details"); 
+
+            if item_id > 10 {
+                // You can add key-value pairs to your log messages
+                warn!(item_id, "High item ID detected");
+            }
+
+            match std::fs::read_to_string("non_existent_file.txt") {
+                Ok(content) => info!("Got file content"),
+                // Use `%` for standard Display formatting
+                Err(e) => error!(error = %e, "Failed to read file"),
+            }
+        }
+
+        fn main() {
+            // Initialize the subscriber.
+            // Use EnvFilter to control log level via RUST_LOG environment variable.
+            let filter = EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| EnvFilter::new("info")); // Default to 'info' if RUST_LOG is not set
+
+            tracing_subscriber::fmt()
+                .with_env_filter(filter)
+                .init();
+
+            info!("Application starting...");
+            process_item(5);
+            process_item(15);
+        }
+        ```
+
+#### Bash
+
+  * **How to Log:** Use `echo` and redirect to `stderr` (`>&2`).
+    ```bash
+    #!/bin/bash
+
+    MY_DIR="/var/log"
+    echo "DEBUG: Checking directory: $MY_DIR" >&2
+
+    if [ -d "$MY_DIR" ]; then
+      echo "INFO: Directory exists." >&2
+      ls -l "$MY_DIR"
+    else
+      echo "ERROR: Directory $MY_DIR not found." >&2
+    fi
+    ```
+
+-----
+
+## Part 2: How to Get Useful Information for Debugging from Log Files
+
+This section covers the principles and techniques for analyzing log files (especially large ones) to find the root cause of an issue.
+
+### Guiding Principles for Log Analysis
+
+1.  **Assume Logs are Provided:** Your primary role is to analyze log output provided by the user, whether it's a small snippet or a large file.
+2.  **Do Not Read Large Files Directly:** **Never attempt to read very large log files (\>300MB) directly.** This is inefficient and may fail.
+3.  **Use the Right Tool for the Job:**
+      * For simple searching/sampling, use standard Linux commands.
+      * For complex, stateful, or multi-line analysis, propose a Python script.
+4.  **Provide Clear Analysis Commands:** Give the user the *exact* analysis commands to run on their log files.
+5.  **Iterate:** Start with broad searches (like "ERROR" or "WARN") and progressively narrow down the focus (e.g., to a specific `request_id` or timestamp) based on the findings.
+
+### Log Analysis Techniques
+
+#### 1\. Command-Line Tool Analysis
+
+Provide the user with commands using powerful, standard Linux tools to sample, search, and filter the log file. Assume the user is in a shell environment with access to these tools.
+
+  * **Check File Size:**
+      * *Purpose:* To determine if the file is large and requires special handling.
+      * *Command:* `ls -lh /path/to/my_large.log`
+  * **Inspect Beginning/End of File:**
+      * *Purpose:* To check for initial errors or the most recent log entries.
+      * *Command (first 100 lines):* `head -n 100 /path/to/my_large.log`
+      * *Command (last 100 lines):* `tail -n 100 /path/to/my_large.log`
+      * *Command (follow new logs):* `tail -f /path/to/my_large.log`
+  * **Search for Patterns (Simple):**
+      * *Purpose:* To quickly find error messages or specific keywords.
+      * *Command (using `grep`):* `grep "ERROR" /path/to/my_large.log`
+      * *Command (case-insensitive):* `grep -i "database connection" /path/to/my_large.log`
+  * **Search for Patterns (Fast & Advanced):**
+      * *Purpose:* `rg` (ripgrep) is often faster and has better defaults.
+      * *Command (find "ERROR" or "WARN"):* `rg "ERROR|WARN" /path/to/my_large.log`
+      * *Command (with context: 2 lines before, 5 after):* `rg -C 5 "request_id_123" /path/to/my_large.log`
+  * **Complex Field-Based Parsing:**
+      * *Purpose:* To extract specific data columns or filter based on values.
+      * *Command (using `awk` to find lines where the 3rd column is "ERROR"):*
+        `awk '$3 == "ERROR" {print $0}' /path/to/my_large.log`
+      * *Command (using `sed` to replace text for cleaner output):*
+        `sed 's/DEBUG/D/g' /path/to/my_large.log | head -n 50`
+  * **Combining Tools (Piping):**
+      * *Purpose:* To build a powerful analysis pipeline.
+      * *Command (find the 1000 most recent lines, then search for "ERROR"):*
+        `tail -n 1000 /path/to/my_large.log | rg "ERROR"`
+      * *Command (find all "INFO" lines, extract the 5th column, sort, and count unique values):*
+        `rg "INFO" /path/to/my_large.log | awk '{print $5}' | sort | uniq -c`
+
+#### 2\. Python Scripting for Complex Filtering
+
+For highly complex analysis (e.g., parsing multi-line JSON logs, correlating events, tracking state changes across many lines), propose a small, dedicated Python 3 filter script.
+
+  * **Instruction:** Propose saving this script (e.g., in `scripts/debug/filter_logs.py`) and instruct the user to pipe the log data through it.
+  * **Example Command:**
+    `cat /path/to/large_log.log | python3 scripts/debug/filter_logs.py`
+  * **Example `scripts/debug/filter_logs.py` (e.g., to find all logs for a specific user ID in JSON):**
+    ```python
+    #!/usr/bin/env python3
+    import sys
+    import json
+
+    TARGET_USER_ID = "user_abc_123"
+
+    print(f"--- Log filter script started. Looking for user: {TARGET_USER_ID} ---", file=sys.stderr)
+
+    try:
+        for line in sys.stdin:
+            try:
+                log_entry = json.loads(line)
+                if log_entry.get("user_id") == TARGET_USER_ID:
+                    print(line, end='') # Print the matching line
+            except json.JSONDecodeError:
+                # Not a JSON line, maybe print if it's relevant?
+                if TARGET_USER_ID in line:
+                    print(f"Non-JSON match: {line}", end='', file=sys.stderr)
+
+    except KeyboardInterrupt:
+        sys.exit(0)
+    except Exception as e:
+        print(f"Error during script execution: {e}", file=sys.stderr)
+
+    print(f"--- Log filter script finished ---", file=sys.stderr)
+    ```
